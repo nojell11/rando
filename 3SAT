@@ -1,0 +1,23 @@
+Tugas: mint NONCE Genesis gratis (BNB Chain) pakai Binance Agentic Wallet yang punya .ai Agent ID. Maks 2 mint per wallet, harga 0, cuma bayar gas. Gagal challenge tidak memotong jatah.
+
+ALUR (MCP resmi: https://mcp.nonceprotocol.xyz/mcp, login via /auth/challenge lalu /auth/verify dengan tanda tangan wallet)
+1. protocol_info: lanjut hanya kalau admission = "open". Statusnya sering buka-tutup, cek berkala.
+2. agent_identity dan wallet_status: pastikan Agent ID terdeteksi dan remainingMints > 0.
+3. prepare_attempt, lalu tanda tangani StartAuthorization (EIP-712). Cek dulu: domain name "NONCE Free Mint", chainId 56, verifyingContract 0x7538ba8C1A82E9706dB6d2463C15f69ADc01a17e, wallet = wallet kita. Jangan tanda tangan Permit/approve apa pun.
+4. start_attempt: deadline 600 detik mulai di sini.
+5. inspect_fragment untuk setiap fragmentId (0 sampai fragmentCount-1), gabungkan semua clauses.
+6. Pecahkan 3-SAT (lihat SOLVER), submit_artifact berupa string 0/1 sepanjang jumlah variabel (karakter ke-k = variabel k).
+7. Kalau attempt_status = VERIFIED_WIN: mint_transaction, lalu contract-call preview, cek tidak ada allowance/risk, baru execute. Verifikasi receipt on-chain.
+
+SOLVER (ini yang bikin cepat)
+- Instance-nya planted 3-SAT model "q-hidden" (Jia-Moore-Strain), q = 0.618 (golden ratio - 1). Klausa dengan j literal benar terhadap jawaban tersembunyi dipertahankan dengan bobot q^j. Akibatnya jumlah literal positif/negatif tiap variabel seimbang, jadi majority vote, Kissat, dan WalkSAT mentok di rasio klausa/variabel 4.5.
+- Pakai belief propagation (BP) dengan bobot faktor klausa [0, q, q^2, q^3] untuk 0..3 literal benar. Inisialisasi pesan acak kecil, damping 0.5, sampai 400 iterasi atau konvergen.
+- Bulatkan tiap variabel ke tanda log-likelihood-nya (H > 0 = 1). Biasanya langsung memenuhi semua klausa.
+- Kalau masih ada klausa gagal: ulangi dengan seed atau damping lain. Kalau tinggal sedikit yang gagal, lanjutkan dengan WalkSAT/probSAT mulai dari hasil BP. Kissat jalankan paralel sebagai cadangan.
+- Hasil: instance 1024 sampai 3072 variabel selesai di bawah 1 detik.
+
+JEBAKAN
+- Ambil jumlah variabel dari field "variables" di fragment (atau teks rules), bukan angka default di benchmark. Ukurannya berubah-ubah (1024/1536/3072); salah panjang = jawaban ditolak.
+- Simpan sesi wallet di folder yang permanen supaya tidak putus sendiri.
+- RPC BSC publik sering 403/429, siapkan beberapa cadangan.
+- Selalu cek ulang admission tepat sebelum prepare_attempt.

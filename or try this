@@ -1,0 +1,5 @@
+- Collect **all** fragments before solving; missing one fails the attempt.
+- It’s **5-SAT / CNF** — use a real SAT solver (kissat / cadical / pysat), don’t brute-force.
+- Submit an assignment of exactly `n_vars` characters of only `0` and `1`.
+- Hard instances may not finish before the deadline — start a **new attempt** instead of forcing one puzzle forever.
+- Prefer a solver portfolio (multiple seeds) and exclusive CPU while solving.

@@ -1,0 +1,110 @@
+"""ProbSAT multi-proses (portfolio seed). Tanpa dependensi eksternal."""
+import math, random, time
+import multiprocessing as mp
+
+def _probsat(clauses, n, seed, stop_evt, deadline, result_q, cb=None):
+    rnd = random.Random(seed)
+    k = max(len(c) for c in clauses)
+    if cb is None:
+        cb = {3: 2.06, 4: 3.0, 5: 3.7}.get(k, 3.7)
+    # tabel probabilitas break^-cb (poly/exp campuran sederhana)
+    table = [cb ** (-i) for i in range(0, 64)]
+    occ = [[] for _ in range(2 * n + 2)]          # idx literal: lit>0 -> 2*lit, lit<0 -> 2*(-lit)+1
+    def li(l): return 2 * l if l > 0 else 2 * (-l) + 1
+    for ci, c in enumerate(clauses):
+        for l in c:
+            occ[li(l)].append(ci)
+    m = len(clauses)
+    best_total = None
+    tries = 0
+    while not stop_evt.is_set() and time.time() < deadline:
+        tries += 1
+        a = [0] + [rnd.getrandbits(1) for _ in range(n)]   # a[v] in {0,1}
+        tc = [0] * m
+        crit = [0] * m
+        unsat = []
+        pos = [-1] * m
+        for ci, c in enumerate(clauses):
+            t = 0; s = 0
+            for l in c:
+                if (l > 0) == (a[abs(l)] == 1):
+                    t += 1; s += abs(l)
+            tc[ci] = t; crit[ci] = s
+            if t == 0:
+                pos[ci] = len(unsat); unsat.append(ci)
+        flips = 0
+        max_flips = 20_000_000
+        while unsat and flips < max_flips:
+            if (flips & 1023) == 0:
+                if stop_evt.is_set() or time.time() >= deadline:
+                    return
+            flips += 1
+            ci = unsat[rnd.randrange(len(unsat))]
+            c = clauses[ci]
+            ps = []
+            tot = 0.0
+            for l in c:
+                v = abs(l)
+                # literal yang sedang benar setelah flip v = kebalikan nilai sekarang; break = klausa
+                # di mana literal benar milik v adalah satu-satunya yang benar
+                cur_true_lit = v if a[v] == 1 else -v
+                br = 0
+                for cj in occ[li(cur_true_lit)]:
+                    if tc[cj] == 1:
+                        br += 1
+                p = table[br] if br < 64 else 0.0
+                ps.append(p); tot += p
+            r = rnd.random() * tot
+            acc = 0.0
+            pick = c[-1]
+            for l, p in zip(c, ps):
+                acc += p
+                if r <= acc:
+                    pick = l; break
+            v = abs(pick)
+            old_true = v if a[v] == 1 else -v
+            a[v] ^= 1
+            new_true = -old_true
+            for cj in occ[li(old_true)]:           # literal ini kini salah
+                tc[cj] -= 1; crit[cj] -= v
+                if tc[cj] == 0:
+                    pos[cj] = len(unsat); unsat.append(cj)
+            for cj in occ[li(new_true)]:           # literal ini kini benar
+                if tc[cj] == 0:
+                    p_ = pos[cj]; last = unsat[-1]
+                    unsat[p_] = last; pos[last] = p_
+                    unsat.pop(); pos[cj] = -1
+                tc[cj] += 1; crit[cj] += v
+        if not unsat:
+            result_q.put("".join(str(a[i]) for i in range(1, n + 1)))
+            stop_evt.set()
+            return
+
+def verify(clauses, assignment):
+    a = assignment
+    for c in clauses:
+        if not any((l > 0) == (a[abs(l) - 1] == "1") for l in c):
+            return False
+    return True
+
+def solve_parallel(clauses, n, workers=12, timeout=840, seed_base=None):
+    ctx = mp.get_context("spawn")
+    stop = ctx.Event()
+    q = ctx.Queue()
+    deadline = time.time() + timeout
+    base = seed_base if seed_base is not None else random.SystemRandom().randrange(1 << 30)
+    procs = [ctx.Process(target=_probsat, args=(clauses, n, base + i, stop, deadline, q)) for i in range(workers)]
+    for p in procs: p.start()
+    ans = None
+    while time.time() < deadline:
+        try:
+            ans = q.get(timeout=1.0); break
+        except Exception:
+            if not any(p.is_alive() for p in procs): break
+    stop.set()
+    for p in procs: p.join(timeout=3)
+    for p in procs:
+        if p.is_alive(): p.terminate()
+    if ans and verify(clauses, ans):
+        return ans
+    return None
